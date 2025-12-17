@@ -1,0 +1,19 @@
+employee_key,source_system,employee_id_source,LastName,FirstName,Title,City,Country,RegionDescription
+1,access,1,Freehafer,Nancy,,Seattle,,
+2,access,2,Cencini,Andrew,,Bellevue,,
+3,access,3,Kotas,Jan,,Redmond,,
+4,access,4,Sergienko,Mariya,,Kirkland,,
+5,access,5,Thorpe,Steven,,Seattle,,
+6,access,6,Neipper,Michael,,Redmond,,
+7,access,7,Zare,Robert,,Seattle,,
+8,access,8,Giussani,Laura,,Redmond,,
+9,access,9,Hellung-Larsen,Anne,,Seattle,,
+10,sqlserver,1,Davolio,Nancy,Sales Representative,Seattle,USA,WA
+11,sqlserver,2,Fuller,Andrew,"Vice President, Sales",Tacoma,USA,WA
+12,sqlserver,3,Leverling,Janet,Sales Representative,Kirkland,USA,WA
+13,sqlserver,4,Peacock,Margaret,Sales Representative,Redmond,USA,WA
+14,sqlserver,5,Buchanan,Steven,Sales Manager,London,UK,
+15,sqlserver,6,Suyama,Michael,Sales Representative,London,UK,
+16,sqlserver,7,King,Robert,Sales Representative,London,UK,
+17,sqlserver,8,Callahan,Laura,Inside Sales Coordinator,Seattle,USA,WA
+18,sqlserver,9,Dodsworth,Anne,Sales Representative,London,UK,
