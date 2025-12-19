@@ -1,58 +1,26 @@
-import pyodbc
 import pandas as pd
-from pathlib import Path
-import sqlite3
+from config import (
+    RAW_DIR,
+    PROCESSED_DIR,
+    FINAL_DIR,
+    EXCEL_OUTPUT,
+    DW_DB_PATH
+)
+from db_connections import conn_access, conn_sqlserver, conn_sqlite
 
 
-
-ACCESS_DB_PATH = r"C:\Users\dinaz\Downloads\Northwind 2012 (1).accdb"  # à adapter
-
-
-SQLSERVER_SERVER = r"localhost\SQLEXPRESS"
-SQLSERVER_DB = "Northwind"
-
-
-OUTPUT_DIR = Path("output_dw")
-OUTPUT_DIR.mkdir(exist_ok=True)
-
-EXCEL_OUTPUT = OUTPUT_DIR / "northwind_dw.xlsx"
-
-
-DW_DB_PATH = OUTPUT_DIR / "northwind_dw.sqlite"
-
-
-
-
-def conn_access():
-    conn_str = (
-        r"DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};"
-        rf"DBQ={ACCESS_DB_PATH};"
-    )
-    return pyodbc.connect(conn_str)
-
-
-def conn_sqlserver():
-    conn_str = (
-        r"DRIVER={ODBC Driver 17 for SQL Server};"
-        rf"SERVER={SQLSERVER_SERVER};"
-        rf"DATABASE={SQLSERVER_DB};"
-        r"Trusted_Connection=yes;"
-    )
-    return pyodbc.connect(conn_str)
-
-
-
-
-
+# =========================
+# EXTRACT
+# =========================
 def extract_access():
-    # on récupère les données de la source access
+    """Extraction des données depuis Access"""
     cnx = conn_access()
 
     df_emp = pd.read_sql("SELECT * FROM Employees", cnx)
     df_cust = pd.read_sql("SELECT * FROM Customers", cnx)
     df_orders = pd.read_sql("SELECT * FROM Orders", cnx)
 
-
+    # Tables optionnelles
     try:
         df_region = pd.read_sql("SELECT * FROM Region", cnx)
         df_territories = pd.read_sql("SELECT * FROM Territories", cnx)
@@ -75,7 +43,7 @@ def extract_access():
 
 
 def extract_sqlserver():
-    # on récupère les données de la source sql server
+    """Extraction des données depuis SQL Server"""
     cnx = conn_sqlserver()
 
     df_emp = pd.read_sql("SELECT * FROM Employees", cnx)
@@ -91,21 +59,37 @@ def extract_sqlserver():
     }
 
 
+def save_raw_sources(access_data, sql_data):
+    """Sauvegarde des données sources dans data/raw"""
+    # Access
+    access_data["employees"].to_csv(RAW_DIR / "access_employees.csv", index=False)
+    access_data["customers"].to_csv(RAW_DIR / "access_customers.csv", index=False)
+    access_data["orders"].to_csv(RAW_DIR / "access_orders.csv", index=False)
 
+    # Tables optionnelles
+    if not access_data["region"].empty:
+        access_data["region"].to_csv(RAW_DIR / "access_region.csv", index=False)
+    if not access_data["territories"].empty:
+        access_data["territories"].to_csv(RAW_DIR / "access_territories.csv", index=False)
+    if not access_data["emp_terr"].empty:
+        access_data["emp_terr"].to_csv(RAW_DIR / "access_employee_territories.csv", index=False)
+
+
+# =========================
+# TRANSFORM (dimensions)
+# =========================
 def build_dim_employee(access_data, sql_data):
-
-
+    """Construction de la dimension Employee"""
     emp_a = access_data["employees"].copy()
     emp_a["source_system"] = "access"
 
-
+    # Gestion des noms de colonnes variables
     if "EmployeeID" in emp_a.columns:
         id_col_a = "EmployeeID"
     elif "ID" in emp_a.columns:
         id_col_a = "ID"
     else:
         raise KeyError("pas de colonne id/employeeid trouvée dans access")
-
 
     if "LastName" in emp_a.columns:
         ln_col_a = "LastName"
@@ -121,7 +105,6 @@ def build_dim_employee(access_data, sql_data):
     else:
         fn_col_a = None
 
-
     rename_a = {id_col_a: "employee_id_source"}
     if ln_col_a:
         rename_a[ln_col_a] = "LastName"
@@ -130,11 +113,9 @@ def build_dim_employee(access_data, sql_data):
 
     emp_a = emp_a.rename(columns=rename_a)
 
-
     for col in ["LastName", "FirstName", "Title", "City", "Country"]:
         if col not in emp_a.columns:
             emp_a[col] = None
-
 
     emp_s = sql_data["employees"].copy()
     emp_s["source_system"] = "sqlserver"
@@ -148,10 +129,8 @@ def build_dim_employee(access_data, sql_data):
         if col not in emp_s.columns:
             emp_s[col] = None
 
-
     emp_a["RegionDescription"] = None
     emp_s["RegionDescription"] = emp_s.get("Region", None)
-
 
     cols = [
         "source_system",
@@ -163,24 +142,16 @@ def build_dim_employee(access_data, sql_data):
         "Country",
         "RegionDescription",
     ]
-    
-    dim_emp = (
-        pd.concat([emp_a[cols], emp_s[cols]], ignore_index=True)
-        .drop_duplicates()
-    )
 
-
+    dim_emp = pd.concat([emp_a[cols], emp_s[cols]], ignore_index=True).drop_duplicates()
     dim_emp.insert(0, "employee_key", range(1, len(dim_emp) + 1))
-
     return dim_emp
 
 
 def build_dim_customer(access_data, sql_data):
-    
-
+    """Construction de la dimension Customer"""
     cust_a = access_data["customers"].copy()
     cust_a["source_system"] = "access"
-
 
     if "CustomerID" in cust_a.columns:
         id_col_a = "CustomerID"
@@ -189,14 +160,12 @@ def build_dim_customer(access_data, sql_data):
     else:
         raise KeyError("pas de colonne id/customerid trouvée dans access")
 
- 
     if "CompanyName" in cust_a.columns:
         comp_col_a = "CompanyName"
     elif "Company" in cust_a.columns:
         comp_col_a = "Company"
     else:
         comp_col_a = None
-
 
     if "ContactName" in cust_a.columns:
         contact_col_a = "ContactName"
@@ -205,7 +174,6 @@ def build_dim_customer(access_data, sql_data):
     else:
         contact_col_a = None
 
-    # on renomme les colonnes
     rename_a = {id_col_a: "customer_id_source"}
     if comp_col_a:
         rename_a[comp_col_a] = "CompanyName"
@@ -214,20 +182,10 @@ def build_dim_customer(access_data, sql_data):
 
     cust_a = cust_a.rename(columns=rename_a)
 
-    # on ajoute les colonnes manquantes
-    for col in [
-        "CompanyName",
-        "ContactName",
-        "City",
-        "Country",
-        "PostalCode",
-        "Address",
-        "Phone",
-    ]:
+    for col in ["CompanyName", "ContactName", "City", "Country", "PostalCode", "Address", "Phone"]:
         if col not in cust_a.columns:
             cust_a[col] = None
 
-    
     cust_s = sql_data["customers"].copy()
     cust_s["source_system"] = "sqlserver"
 
@@ -236,19 +194,10 @@ def build_dim_customer(access_data, sql_data):
 
     cust_s["customer_id_source"] = cust_s["CustomerID"]
 
-    for col in [
-        "CompanyName",
-        "ContactName",
-        "City",
-        "Country",
-        "PostalCode",
-        "Address",
-        "Phone",
-    ]:
+    for col in ["CompanyName", "ContactName", "City", "Country", "PostalCode", "Address", "Phone"]:
         if col not in cust_s.columns:
             cust_s[col] = None
 
-    # colonnes communes
     cols = [
         "source_system",
         "customer_id_source",
@@ -261,25 +210,15 @@ def build_dim_customer(access_data, sql_data):
         "Phone",
     ]
 
-
-    dim_cust = (
-        pd.concat([cust_a[cols], cust_s[cols]], ignore_index=True)
-        .drop_duplicates()
-    )
-
-
+    dim_cust = pd.concat([cust_a[cols], cust_s[cols]], ignore_index=True).drop_duplicates()
     dim_cust.insert(0, "customer_key", range(1, len(dim_cust) + 1))
-
     return dim_cust
 
 
 def build_dim_date(start="1996-01-01", end="2030-12-31"):
-
-
+    """Construction de la dimension Date"""
     dates = pd.date_range(start=start, end=end, freq="D")
     dim_date = pd.DataFrame({"date": dates})
-
-
 
     dim_date["date_key"] = dim_date["date"].dt.strftime("%Y%m%d").astype(int)
     dim_date["year"] = dim_date["date"].dt.year
@@ -287,36 +226,21 @@ def build_dim_date(start="1996-01-01", end="2030-12-31"):
     dim_date["day"] = dim_date["date"].dt.day
     dim_date["month_name"] = dim_date["date"].dt.month_name()
     dim_date["day_of_week"] = dim_date["date"].dt.day_name()
-    dim_date["is_weekend"] = dim_date["day_of_week"].isin(
-        ["Saturday", "Sunday"]
-    )
+    dim_date["is_weekend"] = dim_date["day_of_week"].isin(["Saturday", "Sunday"])
 
-    dim_date = dim_date[
-        [
-            "date_key",
-            "date",
-            "year",
-            "month",
-            "day",
-            "month_name",
-            "day_of_week",
-            "is_weekend",
-        ]
+    return dim_date[
+        ["date_key", "date", "year", "month", "day", "month_name", "day_of_week", "is_weekend"]
     ]
 
-    return dim_date
 
-
-
-# table de faits
-
+# =========================
+# TRANSFORM (fact)
+# =========================
 def build_fact_orders(access_data, sql_data, dim_emp, dim_cust, dim_date):
-    
-    
+    """Construction de la table de faits Orders"""
     ord_a = access_data["orders"].copy()
     ord_a["source_system"] = "access"
 
-    # on trouve les colonnes id de commande, employé, client et dates
     if "OrderID" in ord_a.columns:
         order_id_col_a = "OrderID"
     elif "Order ID" in ord_a.columns:
@@ -352,7 +276,6 @@ def build_fact_orders(access_data, sql_data, dim_emp, dim_cust, dim_date):
     else:
         ship_date_col_a = None
 
-    # on renomme les colonnes
     rename_a = {order_id_col_a: "order_id_source"}
     if emp_id_col_a:
         rename_a[emp_id_col_a] = "EmployeeID"
@@ -364,14 +287,8 @@ def build_fact_orders(access_data, sql_data, dim_emp, dim_cust, dim_date):
         rename_a[ship_date_col_a] = "ShippedDate"
 
     ord_a = ord_a.rename(columns=rename_a)
-    
-    for col in [
-        "order_id_source",
-        "EmployeeID",
-        "CustomerID",
-        "OrderDate",
-        "ShippedDate",
-    ]:
+
+    for col in ["order_id_source", "EmployeeID", "CustomerID", "OrderDate", "ShippedDate"]:
         if col not in ord_a.columns:
             ord_a[col] = None
 
@@ -387,23 +304,10 @@ def build_fact_orders(access_data, sql_data, dim_emp, dim_cust, dim_date):
         if col not in ord_s.columns:
             ord_s[col] = None
 
-
-    common_cols = [
-        "source_system",
-        "order_id_source",
-        "EmployeeID",
-        "CustomerID",
-        "OrderDate",
-        "ShippedDate",
-    ]
-
+    common_cols = ["source_system", "order_id_source", "EmployeeID", "CustomerID", "OrderDate", "ShippedDate"]
     orders = pd.concat([ord_a[common_cols], ord_s[common_cols]], ignore_index=True)
 
-
-
-
-
-    #   mapping des dates
+    # mapping dates -> date_key
     dim_date_index = dim_date.set_index("date")
 
     def date_to_key(d):
@@ -418,15 +322,8 @@ def build_fact_orders(access_data, sql_data, dim_emp, dim_cust, dim_date):
     orders["order_date_key"] = orders["OrderDate"].apply(date_to_key)
     orders["ship_date_key"] = orders["ShippedDate"].apply(date_to_key)
 
-    
-
-
-
-    #   mapping employés
-    
-    emp_map = dim_emp.set_index(
-        ["source_system", "employee_id_source"]
-    )["employee_key"]
+    # mapping employés
+    emp_map = dim_emp.set_index(["source_system", "employee_id_source"])["employee_key"]
 
     def map_emp(row):
         key = (row["source_system"], row["EmployeeID"])
@@ -434,14 +331,8 @@ def build_fact_orders(access_data, sql_data, dim_emp, dim_cust, dim_date):
 
     orders["employee_key"] = orders.apply(map_emp, axis=1)
 
-
-
-
-
-    #   mapping clients
-    cust_map = dim_cust.set_index(
-        ["source_system", "customer_id_source"]
-    )["customer_key"]
+    # mapping clients
+    cust_map = dim_cust.set_index(["source_system", "customer_id_source"])["customer_key"]
 
     def map_cust(row):
         key = (row["source_system"], row["CustomerID"])
@@ -449,11 +340,7 @@ def build_fact_orders(access_data, sql_data, dim_emp, dim_cust, dim_date):
 
     orders["customer_key"] = orders.apply(map_cust, axis=1)
 
-
-
-
-    #   kpis livré / non livré
-  
+    # kpis livré / non livré
     orders["nb_commandes_livrees"] = orders["ShippedDate"].notna().astype(int)
     orders["nb_commandes_non_livrees"] = orders["ShippedDate"].isna().astype(int)
 
@@ -470,51 +357,39 @@ def build_fact_orders(access_data, sql_data, dim_emp, dim_cust, dim_date):
         ]
     ].copy()
 
-    # clé technique pour la table de faits
     fact.insert(0, "fact_order_key", range(1, len(fact) + 1))
-
     return fact
 
 
-#  chargement (csv + excel)
+# =========================
+# LOAD
+# =========================
+def load_processed_dims(dim_emp, dim_cust, dim_date):
+    """Sauvegarde des dimensions dans data/processed"""
+    dim_emp.to_csv(PROCESSED_DIR / "dim_employee.csv", index=False)
+    dim_cust.to_csv(PROCESSED_DIR / "dim_customer.csv", index=False)
+    dim_date.to_csv(PROCESSED_DIR / "dim_date.csv", index=False)
 
 
-def load_outputs(dim_emp, dim_cust, dim_date, fact_orders):
-    # csv
-    dim_emp.to_csv(OUTPUT_DIR / "dim_employee.csv", index=False)
-    dim_cust.to_csv(OUTPUT_DIR / "dim_customer.csv", index=False)
-    dim_date.to_csv(OUTPUT_DIR / "dim_date.csv", index=False)
-    fact_orders.to_csv(OUTPUT_DIR / "fact_orders.csv", index=False)
+def load_final_fact_and_files(dim_emp, dim_cust, dim_date, fact_orders):
+    """Sauvegarde dans data/final : fact_orders + sqlite + excel"""
+    # fact en CSV dans final
+    fact_orders.to_csv(FINAL_DIR / "fact_orders.csv", index=False)
 
-    # excel
+    # excel (dans final)
     with pd.ExcelWriter(EXCEL_OUTPUT, engine="openpyxl") as writer:
         dim_emp.to_excel(writer, sheet_name="dim_employee", index=False)
         dim_cust.to_excel(writer, sheet_name="dim_customer", index=False)
         dim_date.to_excel(writer, sheet_name="dim_date", index=False)
         fact_orders.to_excel(writer, sheet_name="fact_orders", index=False)
 
-    print(f"fichiers générés dans : {OUTPUT_DIR.resolve()}")
-
-
-
-#  chargement en base sqlite
-
-def load_to_sqlite(dim_emp, dim_cust, dim_date, fact_orders):
-    # charge les tables dans la base sqlite
-    print("chargement vers la base sqlite...")
-
-    conn = sqlite3.connect(DW_DB_PATH)
-
+    # sqlite (dans final)
+    conn = conn_sqlite()
     dim_emp.to_sql("dim_employee", conn, if_exists="replace", index=False)
     dim_cust.to_sql("dim_customer", conn, if_exists="replace", index=False)
     dim_date.to_sql("dim_date", conn, if_exists="replace", index=False)
     fact_orders.to_sql("fact_orders", conn, if_exists="replace", index=False)
-
     conn.close()
-
-    print(f"base sqlite créée / mise à jour : {DW_DB_PATH.resolve()}")
-
-
 
 
 def main():
@@ -524,45 +399,29 @@ def main():
     print("extraction sql server...")
     sql_data = extract_sqlserver()
 
-    print("construction des dimensions...")
+    print("sauvegarde RAW (sources)...")
+    save_raw_sources(access_data, sql_data)
+
+    print("construction dimensions...")
     dim_emp = build_dim_employee(access_data, sql_data)
     dim_cust = build_dim_customer(access_data, sql_data)
     dim_date = build_dim_date()
 
-    print("construction de la table de faits...")
+    print("construction fact_orders...")
     fact_orders = build_fact_orders(access_data, sql_data, dim_emp, dim_cust, dim_date)
 
-    # chargement dans la base dw
-    load_to_sqlite(dim_emp, dim_cust, dim_date, fact_orders)
+    print("load processed (dimensions)...")
+    load_processed_dims(dim_emp, dim_cust, dim_date)
 
-    print("chargement vers csv/excel...")
-    load_outputs(dim_emp, dim_cust, dim_date, fact_orders)
+    print("load final (fact + sqlite + excel)...")
+    load_final_fact_and_files(dim_emp, dim_cust, dim_date, fact_orders)
 
-    print("etl terminé ✅")
-
-    # controle
-    base = OUTPUT_DIR
-    dim_emp_csv = pd.read_csv(base / "dim_employee.csv")
-    dim_cust_csv = pd.read_csv(base / "dim_customer.csv")
-    fact_csv = pd.read_csv(base / "fact_orders.csv")
-
-    print("\ndimemployee – source_system :")
-    print(dim_emp_csv["source_system"].value_counts(), "\n")
-
-    print("dimcustomer – source_system :")
-    print(dim_cust_csv["source_system"].value_counts(), "\n")
-
-    print("factorders – source_system :")
-    print(fact_csv["source_system"].value_counts(), "\n")
-
-    print("colonnes dim_employee :")
-    print(dim_emp_csv.columns.tolist(), "\n")
-
-    print("colonnes dim_customer :")
-    print(dim_cust_csv.columns.tolist(), "\n")
-
-    print("colonnes fact_orders :")
-    print(fact_csv.columns.tolist(), "\n")
+    print("\n✅ ETL terminé")
+    print(f"RAW      -> {RAW_DIR.resolve()}")
+    print(f"PROCESSED-> {PROCESSED_DIR.resolve()}")
+    print(f"FINAL    -> {FINAL_DIR.resolve()}")
+    print(f"SQLite   -> {DW_DB_PATH.resolve()}")
+    print(f"Excel    -> {EXCEL_OUTPUT.resolve()}")
 
 
 if __name__ == "__main__":
